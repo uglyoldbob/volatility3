@@ -1,6 +1,8 @@
 # This file is Copyright 2019 Volatility Foundation and licensed under the Volatility Software License 1.0
 # which is available at https://www.volatilityfoundation.org/license/vsl-v1.0
 #
+"""All Doors OS plugins.
 
-# Import all layer implementations so they're available for stacking
-from volatility3.framework.layers import doors
+These modules should only be imported from volatility3.plugins NOT
+volatility3.framework.plugins
+"""

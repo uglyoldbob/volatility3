@@ -80,6 +80,10 @@ def choose_automagic(
     return output
 
 
+# Import all automagic modules to ensure they're registered
+from volatility3.framework.automagic import doors
+
+
 def run(
     automagics: List[interfaces.automagic.AutomagicInterface],
     context: interfaces.context.ContextInterface,
