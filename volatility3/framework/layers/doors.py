@@ -2,6 +2,7 @@
 # which is available at https://www.volatilityfoundation.org/license/vsl-v1.0
 #
 
+import collections
 import logging
 from typing import Optional, Tuple, List, Dict, Any, Iterable
 
@@ -15,8 +16,15 @@ vollog = logging.getLogger(__name__)
 class DoorsKernelLayer(linear.LinearlyMappedLayer):
     """Translation layer for Doors OS kernel memory."""
 
-    # Add a class variable to identify architecture for requirements
-    _architecture = "Intel64"
+    # Set architecture metadata using ChainMap pattern like Intel layers
+    _direct_metadata = collections.ChainMap(
+        {"architecture": "Doors64"},
+        {"mapped": True},
+        interfaces.layers.TranslationLayerInterface._direct_metadata,
+    )
+
+    # Also keep _architecture attribute for compatibility with existing DoorsInfo plugin
+    _architecture = "Doors64"
 
     # Magic pattern to identify a Doors OS memory dump
     MAGIC_PATTERN = b"DoorsOsIdentifier"
@@ -173,48 +181,66 @@ class DoorsKernelLayer(linear.LinearlyMappedLayer):
     ) -> Optional[Tuple[int, int]]:
         """Determines if this is a Doors OS memory image.
 
-        Currently this method always returns a valid header location since we're assuming all dumps are from Doors OS.
-        In the future, this can be updated to scan for specific signatures.
+        Doors OS kernel starts at 0x100000 for x86 hardware, and the signature
+        is located somewhere within the kernel, not necessarily at the beginning.
 
         Args:
             context: The context to retrieve required layers
             base_layer_name: The name of the layer to scan
 
         Returns:
-            A tuple of base offset and the kernel DTB address, or None if the signature is not found
+            A tuple of kernel base address (0x100000) and kernel DTB address, or None if signature not found
         """
+
+        # Doors OS kernel base address for x86
+        DOORS_KERNEL_BASE = 0x100000
 
         # Scan for the Doors OS identifier pattern
         layer = context.layers[base_layer_name]
 
-        # Check at offset 0 first (common location)
-        try:
-            if cls._check_header(layer, 0):
-                vollog.info("Found Doors OS identifier at offset 0")
-                return 0, 0
-        except Exception as e:
-            vollog.debug(f"Error checking header at offset 0: {e}")
-
-        # Scan for signature pattern throughout memory
         vollog.info(f"Scanning for Doors OS identifier: {cls.MAGIC_PATTERN}")
+        vollog.info(f"Doors OS kernel expected at base address: {DOORS_KERNEL_BASE:#x}")
+
+        # Scan within the kernel region (starting from 0x100000)
+        # Look for the signature within the first 16MB of kernel space
+        kernel_scan_size = 0x1000000  # 16MB kernel region
+
         try:
-            # Try direct scan for performance
-            chunk_size = 0x1000000  # 16MB chunks
-            for chunk_start in range(0, layer.maximum_address, chunk_size):
-                chunk_size = min(chunk_size, layer.maximum_address - chunk_start)
-                if chunk_size <= 0:
+            # Scan in chunks within the kernel region
+            chunk_size = 0x100000  # 1MB chunks
+            for chunk_offset in range(0, kernel_scan_size, chunk_size):
+                scan_start = DOORS_KERNEL_BASE + chunk_offset
+
+                # Make sure we don't exceed the layer's maximum address
+                if scan_start >= layer.maximum_address:
                     break
 
-                chunk = layer.read(chunk_start, chunk_size, pad=True)
-                pos = chunk.find(cls.MAGIC_PATTERN)
-                if pos >= 0:
-                    offset = chunk_start + pos
-                    vollog.info(f"Found Doors OS identifier at offset: {offset:#x}")
-                    return offset, 0
-        except Exception as e:
-            vollog.debug(f"Error in direct scan: {e}")
+                actual_chunk_size = min(chunk_size, layer.maximum_address - scan_start)
+                if actual_chunk_size <= 0:
+                    break
 
-        # Fall back to scanner interface
+                try:
+                    chunk = layer.read(scan_start, actual_chunk_size, pad=True)
+                    pos = chunk.find(cls.MAGIC_PATTERN)
+                    if pos >= 0:
+                        signature_offset = scan_start + pos
+                        vollog.info(
+                            f"Found Doors OS identifier at offset: {signature_offset:#x}"
+                        )
+                        vollog.info(
+                            f"Using kernel base address: {DOORS_KERNEL_BASE:#x}"
+                        )
+                        # Return kernel base (0x100000), not signature offset
+                        return DOORS_KERNEL_BASE, 0
+                except Exception as e:
+                    vollog.debug(f"Error reading chunk at {scan_start:#x}: {e}")
+                    continue
+
+        except Exception as e:
+            vollog.debug(f"Error in kernel region scan: {e}")
+
+        # Fall back to scanning the entire memory image
+        vollog.info("Signature not found in kernel region, scanning entire image...")
         try:
             # Create a custom scanner that implements __call__
             class BytesScanner(interfaces.layers.ScannerInterface):
@@ -248,10 +274,11 @@ class DoorsKernelLayer(linear.LinearlyMappedLayer):
 
             for offset, _pattern in scanner:
                 vollog.info(f"Found Doors OS identifier at offset: {offset:#x}")
-                # For a flat mapped kernel, use offset as base_offset and 0 as DTB
-                return offset, 0
+                vollog.info(f"Using kernel base address: {DOORS_KERNEL_BASE:#x}")
+                # Always return kernel base (0x100000), regardless of where signature was found
+                return DOORS_KERNEL_BASE, 0
         except Exception as e:
-            vollog.debug(f"Error in scanner interface: {e}")
+            vollog.debug(f"Error in fallback scanner: {e}")
 
         vollog.info("No Doors OS identifier found")
         return None
@@ -370,7 +397,9 @@ class DoorsStacker(interfaces.automagic.StackerLayerInterface):
         if progress_callback is not None:
             progress_callback(50, "Creating Doors OS kernel layer")
 
-        vollog.info(f"Using base_offset: {base_offset}, dtb: {dtb}")
+        vollog.info(
+            f"Using kernel_base: {base_offset:#x} (Doors OS kernel base), dtb: {dtb}"
+        )
 
         # Create the configuration
         new_layer_name = context.layers.free_layer_name("DoorsKernelLayer")
@@ -433,7 +462,7 @@ class DoorsStacker(interfaces.automagic.StackerLayerInterface):
 
             # Print a message that will be visible to the user
             print(
-                f"Created Doors OS layer {new_layer_name} at offset 0x{base_offset:x}"
+                f"Created Doors OS layer {new_layer_name} with kernel base at {base_offset:#x}"
             )
         except Exception as e:
             vollog.error(f"Error creating DoorsKernelLayer: {str(e)}")
@@ -459,6 +488,8 @@ class DoorsStacker(interfaces.automagic.StackerLayerInterface):
 
         vollog.info(f"Returning Doors layer {doors_layer.name}")
         # Add an output message that will be visible in normal mode
-        print(f"DoorsStacker: Created Doors OS layer {doors_layer.name}")
-
-        return doors_layer
+        vollog.info(f"DoorsStacker: Created Doors OS layer {doors_layer.name}")
+        asdf = [doors_layer] + layer_name
+        adisp = str(asdf)
+        vollog.info(f"Doors layers are now {adisp}")
+        return asdf

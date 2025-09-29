@@ -28,49 +28,11 @@ class DoorsInfo(plugins.PluginInterface):
         return [
             requirements.TranslationLayerRequirement(
                 name="primary",
-                description="Memory layer for the Doors OS kernel",
-                architectures=["Intel64"],
+                architectures=["Doors64"],
             ),
         ]
 
-    @classmethod
-    def unsatisfied(cls, context, config_path):
-        """Override unsatisfied to create layer if needed and bypass validation."""
-        primary_path = interfaces.configuration.path_join(config_path, "primary")
 
-        # Check if requirement is already satisfied
-        result = super().unsatisfied(context, config_path)
-        if not result:
-            return result
-
-        vollog.info(f"DoorsInfo requirement not satisfied, attempting to create layer")
-
-        # Try to find or create a DoorsKernelLayer
-        doors_layer_name = None
-
-        # First check if a DoorsKernelLayer already exists
-        for layer_name, layer in context.layers.items():
-            if hasattr(layer, "__class__") and "DoorsKernelLayer" in str(
-                layer.__class__
-            ):
-                doors_layer_name = layer_name
-                vollog.info(f"Found existing DoorsKernelLayer: {doors_layer_name}")
-                break
-
-        # If no layer exists, try to create one
-        if not doors_layer_name:
-            doors_layer_name = cls._create_doors_layer(context, config_path)
-
-        # If we have a layer, bypass the requirement system entirely
-        if doors_layer_name and doors_layer_name in context.layers:
-            context.config[primary_path] = doors_layer_name
-            vollog.info(f"Set {primary_path} to {doors_layer_name}")
-            vollog.info(f"DoorsInfo requirement satisfied by bypassing validation")
-            # Return empty dict to indicate all requirements are satisfied
-            return {}
-
-        vollog.warning(f"Could not satisfy DoorsInfo requirement")
-        return result
 
     @classmethod
     def _create_doors_layer(cls, context, config_path):
@@ -99,28 +61,42 @@ class DoorsInfo(plugins.PluginInterface):
             base_layer = context.layers[base_layer_name]
             doors_signature = b"DoorsOsIdentifier"
 
-            # Simple scan for the signature
-            signature_offset = None
+            # Doors OS kernel base address for x86
+            DOORS_KERNEL_BASE = 0x100000
+
+            # Scan for the signature within the kernel region (starting from 0x100000)
+            signature_found = False
             chunk_size = 0x100000  # 1MB chunks
-            for offset in range(
-                0, min(base_layer.maximum_address, 0x2000000), chunk_size
-            ):  # Limit to 32MB
+            kernel_scan_size = 0x1000000  # 16MB kernel region
+
+            for chunk_offset in range(0, kernel_scan_size, chunk_size):
+                scan_start = DOORS_KERNEL_BASE + chunk_offset
+
+                # Make sure we don't exceed the layer's maximum address
+                if scan_start >= base_layer.maximum_address:
+                    break
+
+                actual_chunk_size = min(
+                    chunk_size, base_layer.maximum_address - scan_start
+                )
+                if actual_chunk_size <= 0:
+                    break
+
                 try:
-                    data = base_layer.read(
-                        offset, min(chunk_size, base_layer.maximum_address - offset)
-                    )
+                    data = base_layer.read(scan_start, actual_chunk_size)
                     sig_pos = data.find(doors_signature)
                     if sig_pos >= 0:
-                        signature_offset = offset + sig_pos
+                        signature_offset = scan_start + sig_pos
                         vollog.info(
                             f"Found Doors OS signature at offset {signature_offset:#x}"
                         )
+                        signature_found = True
                         break
                 except Exception as e:
                     continue
 
-            if signature_offset is None:
-                vollog.warning("Doors OS signature not found in base layer")
+            if not signature_found:
+                vollog.warning("Doors OS signature not found in kernel region")
                 return None
 
             # Create DoorsKernelLayer
@@ -137,7 +113,7 @@ class DoorsInfo(plugins.PluginInterface):
             ] = base_layer_name
             context.config[
                 interfaces.configuration.path_join(config_path, "base_offset")
-            ] = signature_offset
+            ] = DOORS_KERNEL_BASE  # Use kernel base, not signature offset
             context.config[interfaces.configuration.path_join(config_path, "dtb")] = 0
 
             # Create and add the layer
@@ -145,7 +121,10 @@ class DoorsInfo(plugins.PluginInterface):
             context.add_layer(doors_layer)
 
             vollog.info(f"Successfully created DoorsKernelLayer: {new_layer_name}")
-            return new_layer_name
+
+            context.config[interfaces.configuration.path_join(config_path, "layer_name")] = new_layer_name
+
+            return new_layer
 
         except Exception as e:
             vollog.warning(f"Failed to create DoorsKernelLayer: {e}")
