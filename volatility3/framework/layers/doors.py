@@ -189,7 +189,7 @@ class DoorsKernelLayer(linear.LinearlyMappedLayer):
         """
 
         # Doors OS kernel base address for x86
-        DOORS_KERNEL_BASE = 0x100000
+        DOORS_KERNEL_BASE = 0
 
         # Scan for the Doors OS identifier pattern
         layer = context.layers[base_layer_name]
