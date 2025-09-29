@@ -28,11 +28,10 @@ class DoorsInfo(plugins.PluginInterface):
         return [
             requirements.TranslationLayerRequirement(
                 name="primary",
+                oses=["doors"],
                 architectures=["Doors64"],
             ),
         ]
-
-
 
     @classmethod
     def _create_doors_layer(cls, context, config_path):
@@ -122,7 +121,9 @@ class DoorsInfo(plugins.PluginInterface):
 
             vollog.info(f"Successfully created DoorsKernelLayer: {new_layer_name}")
 
-            context.config[interfaces.configuration.path_join(config_path, "layer_name")] = new_layer_name
+            context.config[
+                interfaces.configuration.path_join(config_path, "layer_name")
+            ] = new_layer_name
 
             return new_layer
 
@@ -394,8 +395,20 @@ class DoorsInfo(plugins.PluginInterface):
         # Get the base offset of the layer
         base_offset = doors_layer.config.get("base_offset", 0)
 
-        # Find the Doors OS identifier
-        doors_identifier_offset = self._find_doors_identifier(doors_layer)
+        # Find the Doors OS identifier in the base layer if this is a DoorsKernelLayer
+        doors_identifier_offset = None
+        if isinstance(doors_layer, doors.DoorsKernelLayer):
+            # For DoorsKernelLayer, look for the identifier in the base layer
+            base_layer_name = doors_layer.config.get("memory_layer")
+            if base_layer_name and base_layer_name in self.context.layers:
+                base_layer = self.context.layers[base_layer_name]
+                doors_identifier_offset = self._find_doors_identifier(base_layer)
+                vollog.info(
+                    f"Found identifier at offset {doors_identifier_offset:#x} in base layer {base_layer_name}"
+                )
+        else:
+            # For other layers, scan directly
+            doors_identifier_offset = self._find_doors_identifier(doors_layer)
 
         # Return data as a TreeGrid
         return renderers.TreeGrid(
@@ -443,7 +456,7 @@ class DoorsInfo(plugins.PluginInterface):
                     0,
                     [
                         "Architecture",
-                        doors_layer._architecture,
+                        doors_layer.metadata.get("architecture", "Unknown"),
                     ],
                 ),
                 (

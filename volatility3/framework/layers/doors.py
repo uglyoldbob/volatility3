@@ -18,13 +18,9 @@ class DoorsKernelLayer(linear.LinearlyMappedLayer):
 
     # Set architecture metadata using ChainMap pattern like Intel layers
     _direct_metadata = collections.ChainMap(
-        {"architecture": "Doors64"},
-        {"mapped": True},
+        {"architecture": "Doors64", "os": "doors", "mapped": True},
         interfaces.layers.TranslationLayerInterface._direct_metadata,
     )
-
-    # Also keep _architecture attribute for compatibility with existing DoorsInfo plugin
-    _architecture = "Doors64"
 
     # Magic pattern to identify a Doors OS memory dump
     MAGIC_PATTERN = b"DoorsOsIdentifier"
@@ -489,7 +485,4 @@ class DoorsStacker(interfaces.automagic.StackerLayerInterface):
         vollog.info(f"Returning Doors layer {doors_layer.name}")
         # Add an output message that will be visible in normal mode
         vollog.info(f"DoorsStacker: Created Doors OS layer {doors_layer.name}")
-        asdf = [doors_layer] + layer_name
-        adisp = str(asdf)
-        vollog.info(f"Doors layers are now {adisp}")
-        return asdf
+        return [doors_layer]
