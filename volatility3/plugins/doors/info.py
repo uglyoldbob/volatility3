@@ -4,16 +4,14 @@
 
 """Doors OS information plugin for Volatility 3."""
 
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import List, Optional
 import logging
-import os
 
-from volatility3.framework import interfaces, renderers, constants, exceptions
+from volatility3.framework import interfaces, renderers
 from volatility3.framework.configuration import requirements
 from volatility3.framework.interfaces import plugins
 from volatility3.framework.layers import doors
-from volatility3.framework.renderers import format_hints
-from volatility3.framework.symbols import intermed
+
 
 vollog = logging.getLogger(__name__)
 
@@ -33,6 +31,10 @@ class DoorsInfo(plugins.PluginInterface):
                 oses=["doors"],
                 architectures=["Doors64"],
             ),
+            requirements.SymbolTableRequirement(
+                name = "doors_kernel1",
+                description = "Symbols for the Doors kernel"
+            )
         ]
 
     def _get_doors_layer(self) -> Optional[interfaces.layers.DataLayerInterface]:
@@ -173,40 +175,6 @@ class DoorsInfo(plugins.PluginInterface):
             vollog.error(f"Error dumping memory at {start_addr:#x}: {e}")
             return f"Error: Could not read memory at {start_addr:#x}"
 
-    def _load_doors_symbols(self):
-        """Manually load Doors OS symbols if not already loaded."""
-        # Look for symbols.json in the symbol directories
-        symbol_dirs = [
-            "../symbols",
-            "symbols",
-            os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "symbols"),
-        ]
-
-        for symbol_dir in symbol_dirs:
-            symbols_path = os.path.join(symbol_dir, "symbols.json")
-            if os.path.exists(symbols_path):
-                try:
-                    vollog.info(f"Loading symbols from: {symbols_path}")
-                    table_name = self.context.symbol_space.free_table_name(
-                        "doors_kernel"
-                    )
-
-                    symbol_table = intermed.IntermediateSymbolTable(
-                        context=self.context,
-                        config_path=f"symbols.{table_name}",
-                        name=table_name,
-                        isf_url=f"file://{os.path.abspath(symbols_path)}",
-                    )
-
-                    self.context.symbol_space.append(symbol_table)
-                    vollog.info(f"Successfully loaded symbol table: {table_name}")
-                    return table_name
-                except Exception as e:
-                    vollog.warning(f"Error loading symbols from {symbols_path}: {e}")
-                    continue
-
-        return None
-
     def run(self) -> renderers.TreeGrid:
         """Runs the Doors OS Info plugin."""
         vollog.info("Starting DoorsInfo plugin")
@@ -252,43 +220,10 @@ class DoorsInfo(plugins.PluginInterface):
 
             if not symbol_table_used:
                 vollog.warning(
-                    "PAGE_TABLE_PDP_BOOT symbol not found in any symbol table"
+                    "PAGE_TABLE_PDP_BOOT symbol not found in any symbol table. Make sure symbols are loaded with --symbol-dirs"
                 )
                 available_tables = list(self.context.symbol_space.keys())
                 vollog.info(f"Available symbol tables: {available_tables}")
-
-                # Try to manually load symbols
-                vollog.info("Attempting to manually load symbols...")
-                manual_table = self._load_doors_symbols()
-                if manual_table:
-                    # Retry symbol lookup with manually loaded table
-                    symbol_table = self.context.symbol_space[manual_table]
-                    if "PAGE_TABLE_PDP_BOOT" in symbol_table.symbols:
-                        symbol = symbol_table.get_symbol("PAGE_TABLE_PDP_BOOT")
-                        page_table_pdp_boot_address = symbol.address
-                        symbol_table_used = manual_table
-                        vollog.info(
-                            f"Found PAGE_TABLE_PDP_BOOT symbol in manually loaded table '{manual_table}' at address: 0x{page_table_pdp_boot_address:x}"
-                        )
-
-                        # Try to read the value at that address
-                        doors_layer = self._get_doors_layer()
-                        if doors_layer:
-                            try:
-                                # Read 8 bytes (assuming 64-bit value)
-                                page_table_pdp_boot_bytes = doors_layer.read(
-                                    page_table_pdp_boot_address, 8
-                                )
-                                page_table_pdp_boot_value = int.from_bytes(
-                                    page_table_pdp_boot_bytes, byteorder="little"
-                                )
-                                vollog.info(
-                                    f"PAGE_TABLE_PDP_BOOT value: 0x{page_table_pdp_boot_value:x}"
-                                )
-                            except Exception as e:
-                                vollog.warning(
-                                    f"Could not read PAGE_TABLE_PDP_BOOT value: {e}"
-                                )
 
         except Exception as e:
             vollog.warning(f"Error accessing PAGE_TABLE_PDP_BOOT symbol: {e}")
@@ -406,7 +341,7 @@ class DoorsInfo(plugins.PluginInterface):
             doors_identifier_offset = self._find_doors_identifier(doors_layer)
 
         # Dump 0x1000 bytes of memory starting at 0x100000
-        memory_dump = self._dump_memory_hex(doors_layer, 0x1bb000, 0x1000)
+        memory_dump = self._dump_memory_hex(doors_layer, 0x1BB000, 0x1000)
 
         # Return data as a TreeGrid
         return renderers.TreeGrid(
@@ -520,7 +455,7 @@ class DoorsKernelInfo(plugins.PluginInterface):
 
     def _scan_kernel_info(
         self, layer: interfaces.layers.DataLayerInterface
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """Scans for information strings in the memory image."""
         result = {}
 

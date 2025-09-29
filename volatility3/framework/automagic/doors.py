@@ -9,6 +9,7 @@ from typing import Any, List, Optional, Tuple, Type
 from volatility3.framework import constants, interfaces
 from volatility3.framework.configuration import requirements
 from volatility3.framework.layers import doors
+from volatility3.framework.automagic import symbol_finder
 
 vollog = logging.getLogger(__name__)
 
@@ -264,3 +265,123 @@ class DoorsIdentifier(interfaces.automagic.AutomagicInterface):
         except Exception as e:
             vollog.error(f"Failed to build Doors OS layer: {e}")
             return None
+
+
+class DoorsSymbolFinder(symbol_finder.SymbolFinder):
+    """Doors OS symbol loader that automatically loads symbols from symbol directories."""
+
+    banner_config_key = "doors_banner"
+    operating_system = "doors"
+    symbol_class = "volatility3.framework.symbols.intermed.IntermediateSymbolTable"
+    exclusion_list = ["windows", "mac"]
+
+    def __call__(
+        self,
+        context: interfaces.context.ContextInterface,
+        config_path: str,
+        requirement: interfaces.configuration.RequirementInterface,
+        progress_callback: constants.ProgressCallback = None,
+    ) -> None:
+        """Automatically load Doors OS symbols when a Doors layer is detected."""
+
+        vollog.debug(
+            f"DoorsSymbolFinder called with requirement type: {type(requirement).__name__}"
+        )
+
+        # Find SymbolTableRequirements within the requirement
+        symbol_requirements = self._find_symbol_requirements(requirement)
+
+        if not symbol_requirements:
+            vollog.debug("No SymbolTableRequirements found, skipping")
+            return
+
+        # Look for any Doors OS layers in the context
+        doors_layers = [
+            layer
+            for layer in context.layers.values()
+            if isinstance(layer, doors.DoorsKernelLayer)
+        ]
+
+        vollog.debug(f"Found {len(doors_layers)} Doors OS layers")
+
+        if not doors_layers:
+            vollog.debug("No Doors OS layers found, skipping symbol loading")
+            return
+
+        vollog.info("Found Doors OS layer, attempting to load symbols automatically")
+
+        # Try to find and load symbols.json from symbol directories
+        symbol_paths = []
+
+        # Get symbol paths from volatility3.symbols.__path__ which includes command line --symbol-dirs
+        try:
+            import volatility3.symbols
+
+            symbol_paths.extend(volatility3.symbols.__path__)
+        except (ImportError, AttributeError):
+            # Fallback to constants if volatility3.symbols is not available
+            symbol_paths.extend(getattr(constants, "SYMBOL_BASEPATHS", []))
+
+        for symbol_dir in symbol_paths:
+            if not os.path.isdir(symbol_dir):
+                continue
+
+            symbols_file = os.path.join(symbol_dir, "symbols.json")
+            if os.path.exists(symbols_file):
+                vollog.info(f"Loading Doors OS symbols from: {symbols_file}")
+
+                # Try to satisfy all symbol requirements
+                for sub_config_path, symbol_requirement in symbol_requirements:
+                    if symbol_requirement.unsatisfied(context, sub_config_path):
+                        try:
+                            # Set up the symbol table configuration
+                            table_name = context.symbol_space.free_table_name(
+                                "doors_kernel"
+                            )
+                            path_join = interfaces.configuration.path_join
+
+                            context.config[
+                                path_join(
+                                    sub_config_path, symbol_requirement.name, "class"
+                                )
+                            ] = self.symbol_class
+                            context.config[
+                                path_join(
+                                    sub_config_path, symbol_requirement.name, "isf_url"
+                                )
+                            ] = f"file://{os.path.abspath(symbols_file)}"
+
+                            # Construct the symbol table
+                            symbol_requirement.construct(context, sub_config_path)
+                            vollog.info(
+                                f"Successfully loaded Doors OS symbol table: {table_name}"
+                            )
+
+                        except Exception as e:
+                            vollog.warning(
+                                f"Failed to load symbols from {symbols_file}: {e}"
+                            )
+                            continue
+                return
+
+        vollog.warning("No Doors OS symbols found in symbol directories")
+
+    def _find_symbol_requirements(
+        self, requirement: interfaces.configuration.RequirementInterface
+    ) -> list:
+        """Find all SymbolTableRequirements within a requirement structure."""
+        symbol_requirements = []
+
+        if isinstance(requirement, requirements.SymbolTableRequirement):
+            symbol_requirements.append(("", requirement))
+        elif isinstance(requirement, requirements.MultiRequirement):
+            for sub_path, sub_req in self.find_requirements(
+                None,
+                "",
+                requirement,
+                requirements.SymbolTableRequirement,
+                shortcut=False,
+            ):
+                symbol_requirements.append((sub_path, sub_req))
+
+        return symbol_requirements
