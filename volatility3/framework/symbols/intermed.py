@@ -222,6 +222,8 @@ class IntermediateSymbolTable(interfaces.symbols.SymbolTableInterface):
                 path = os.path.abspath(os.path.join(__file__, path))
             for extension in extensions:
                 # Hopefully these will not be large lists, otherwise this might be slow
+                asdf = pathlib.Path(path).joinpath(sub_path).resolve()
+                vollog.info(f"Looking at {asdf}")
                 try:
                     for found in (
                         pathlib.Path(path)
@@ -296,6 +298,7 @@ class IntermediateSymbolTable(interfaces.symbols.SymbolTableInterface):
             symbol_mask=symbol_mask,
         )
         context.symbol_space.append(table)
+        vollog.error(f"GOT THE TABLE AS {table_name}")
         return table_name
 
     @classmethod
@@ -751,12 +754,16 @@ class Version6Format(Version5Format):
             return None
 
         json_metadata = self._json_object["metadata"]
+        vollog.info("Checking metadata for version 6 format")
         if "windows" in json_metadata:
             return metadata.WindowsMetadata(json_metadata["windows"])
         if "linux" in json_metadata:
             return metadata.LinuxMetadata(json_metadata["linux"])
         if "mac" in json_metadata:
             return metadata.MacMetadata(json_metadata["mac"])
+        if "doors" in json_metadata:
+            print("Returning doors metadata")
+            return metadata.DoorsMetadata(json_metadata["doors"])
 
         return None
 

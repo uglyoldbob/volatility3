@@ -47,16 +47,55 @@ class SymbolFinder(interfaces.automagic.AutomagicInterface):
                 version=(1, 0, 0),
             ),
         ]
+    
+    def analyze_requirement(self, req, indent=0):
+        """Recursively analyze a requirement and its children"""
+        prefix = "  " * indent
+        
+        vollog.info(f"{prefix}Requirement: {req.name}")
+        vollog.info(f"{prefix}  Type: {type(req).__name__}")
+        
+        if hasattr(req, 'description'):
+            vollog.info(f"{prefix}  Description: {req.description}")
+        
+        # Check for specific attributes
+        if isinstance(req, requirements.SymbolTableRequirement):
+            vollog.info(f"{prefix}  >>> SYMBOL TABLE REQUIREMENT <<<")
+            if hasattr(req, 'architectures'):
+                vollog.info(f"{prefix}  Architectures: {req.architectures}")
+            if hasattr(req, 'os'):
+                vollog.info(f"{prefix}  OS: {req.os}")
+        
+        elif isinstance(req, requirements.TranslationLayerRequirement):
+            vollog.info(f"{prefix}  >>> TRANSLATION LAYER REQUIREMENT <<<")
+            if hasattr(req, 'architectures'):
+                vollog.info(f"{prefix}  Architectures: {req.architectures}")
+        
+        elif isinstance(req, requirements.MultiRequirement):
+            vollog.info(f"{prefix}  >>> MULTI REQUIREMENT (Container) <<<")
+            vollog.info(f"{prefix}  Contains {len(req.requirements)} sub-requirements:")
+            
+            # Recursively analyze sub-requirements
+            for sub_req in req.requirements.values():
+                vollog.info(f"{prefix}  ---")
+                self.analyze_requirement(sub_req, indent + 1)
+        
+        # Show optional/required status
+        if hasattr(req, 'optional'):
+            vollog.info(f"{prefix}  Optional: {req.optional}")
 
     @property
     def banners(self) -> symbol_cache.BannersType:
         """Creates a cached copy of the results, but only it's been
         requested."""
         if not self._banners:
+            vollog.info("Looking for banners definition")
             identifiers_path = os.path.join(
                 constants.CACHE_PATH, constants.IDENTIFIERS_FILENAME
             )
+            vollog.info(f"Looking in {identifiers_path}")
             cache = symbol_cache.SqliteCache(identifiers_path)
+            vollog.info(f"operating system {self.operating_system}")
             self._banners = cache.get_identifier_dictionary(
                 operating_system=self.operating_system
             )
@@ -75,6 +114,13 @@ class SymbolFinder(interfaces.automagic.AutomagicInterface):
         # Bomb out early if our details haven't been configured
         if self.symbol_class is None:
             return None
+        
+        vollog.debug(f"SymbolFinder called for requirement: {requirement.name}")
+        vollog.debug(f"Config path: {config_path}")
+        vollog.debug(f"Requirement type: {type(requirement)}")
+
+        self.analyze_requirement(requirement)
+        vollog.debug(f"Processing SymbolTableRequirement: {requirement.name}")
 
         self._requirements = self.find_requirements(
             context,
@@ -122,6 +168,10 @@ class SymbolFinder(interfaces.automagic.AutomagicInterface):
     ) -> None:
         """Accepts a context, config_path and SymbolTableRequirement, with a
         constructed layer_name and scans the layer for banners."""
+
+        vollog.info("Looking for banners for symbols")
+        for a in self.banners:
+            vollog.info(f"Looking for banners for symbols {a}")
 
         # Bomb out early if there's no banners
         if not self.banners:

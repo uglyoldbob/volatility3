@@ -680,11 +680,14 @@ class CommandLine:
                 excp.unsatisfied[config_path],
                 configuration.requirements.TranslationLayerRequirement,
             )
+            print(f"SYMBOLS FAILED {symbols_failed}")
+            asdf = excp.unsatisfied[config_path]
             symbols_failed = symbols_failed or isinstance(
-                excp.unsatisfied[config_path],
+                asdf,
                 configuration.requirements.SymbolTableRequirement,
             )
-
+            for a in asdf.requirements:
+                print(f"SYMBOLS FAILED {a}")
             print(
                 f"Unsatisfied requirement {config_path}: {excp.unsatisfied[config_path].description}"
             )

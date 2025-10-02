@@ -7,14 +7,149 @@
 from typing import List, Optional
 import logging
 
-from volatility3.framework import interfaces, renderers
+from volatility3.framework import exceptions, interfaces, renderers
 from volatility3.framework.configuration import requirements
 from volatility3.framework.interfaces import plugins
 from volatility3.framework.layers import doors
+from volatility3.framework.renderers import format_hints
+from volatility3.framework.objects import utility
 
 
 vollog = logging.getLogger(__name__)
 
+class Banners(interfaces.plugins.PluginInterface):
+    """Attempts to identify the Doors OS banner/version information."""
+
+    _required_framework_version = (2, 0, 0)
+    _version = (1, 0, 0)
+
+    @classmethod
+    def get_requirements(cls) -> List[interfaces.configuration.RequirementInterface]:
+        """Define the requirements for this plugin."""
+        return [
+            requirements.ModuleRequirement(
+                name="kernel",
+                description="Doors kernel module"
+            )
+        ]
+
+    def _get_banner_from_symbol(self, kernel):
+        """
+        Retrieve banner directly from the symbol table.
+        This is the preferred method when symbols are available.
+        """
+        try:
+            # Method 1: Direct banner symbol
+            banner_symbol = kernel.get_symbol("doors_banner")
+            banner_addr = banner_symbol.address
+            
+            # Read the banner string from memory
+            banner_obj = kernel.object(
+                object_type="array",
+                offset=banner_addr,
+                subtype=kernel.get_type("char"),
+                count=256
+            )
+            
+            banner_str = utility.array_to_string(banner_obj)
+            return banner_str, banner_addr
+            
+        except exceptions.SymbolError:
+            # Symbol not found, try alternative methods
+            pass
+        
+        return None, None
+
+    def _get_banner_from_uts(self, kernel):
+        """
+        Retrieve banner from UTS namespace structure.
+        Similar to how Linux stores uname information.
+        """
+        try:
+            # Get the init_uts_ns symbol
+            uts_ns = kernel.object_from_symbol("init_uts_ns")
+            
+            # Access the utsname structure
+            utsname = uts_ns.name
+            
+            # Extract version information
+            sysname = utility.array_to_string(utsname.sysname)
+            release = utility.array_to_string(utsname.release)
+            version = utility.array_to_string(utsname.version)
+            machine = utility.array_to_string(utsname.machine)
+            
+            # Combine into banner format
+            banner = f"{sysname} {release} {version} {machine}"
+            return banner, utsname.vol.offset
+            
+        except (exceptions.SymbolError, AttributeError):
+            pass
+        
+        return None, None
+
+    def _get_banner_from_version_info(self, kernel):
+        """
+        Retrieve banner from custom version_info structure.
+        """
+        try:
+            version_info = kernel.object_from_symbol("doors_version")
+            
+            major = version_info.major
+            minor = version_info.minor
+            patch = version_info.patch
+            
+            # Read version string if pointer is valid
+            if version_info.version_string:
+                version_str_obj = kernel.object(
+                    object_type="string",
+                    offset=version_info.version_string,
+                    max_length=256
+                )
+                full_banner = utility.pointer_to_string(
+                    version_str_obj, 
+                    256
+                )
+            else:
+                full_banner = f"doors version {major}.{minor}.{patch}"
+            
+            return full_banner, version_info.vol.offset
+            
+        except (exceptions.SymbolError, AttributeError):
+            pass
+        
+        return None, None
+
+    def _generator(self):
+        """Generate banner information."""
+        kernel = self.context.modules[self.config["kernel"]]
+        
+        # Try different methods to retrieve the banner
+        methods = [
+            ("Direct Symbol", self._get_banner_from_symbol),
+            ("UTS Namespace", self._get_banner_from_uts),
+            ("Version Info", self._get_banner_from_version_info)
+        ]
+        
+        for method_name, method_func in methods:
+            banner, offset = method_func(kernel)
+            
+            if banner:
+                yield (0, (
+                    method_name,
+                    format_hints.Hex(offset) if offset else "N/A",
+                    banner
+                ))
+
+    def run(self):
+        """Execute the plugin and return results."""
+        return renderers.TreeGrid(
+            [
+                ("Method", str),
+                ("Offset", format_hints.Hex),
+                ("Banner", str)
+            ],
+            self._generator()
+        )
 
 class DoorsInfo(plugins.PluginInterface):
     """Displays information about the Doors OS memory image."""
@@ -26,14 +161,9 @@ class DoorsInfo(plugins.PluginInterface):
     def get_requirements(cls) -> List[interfaces.configuration.RequirementInterface]:
         """Returns a list of requirements needed for this plugin to execute."""
         return [
-            requirements.TranslationLayerRequirement(
-                name="primary",
-                oses=["doors"],
-                architectures=["Doors64"],
-            ),
-            requirements.SymbolTableRequirement(
-                name = "doors_kernel1",
-                description = "Symbols for the Doors kernel"
+            requirements.ModuleRequirement(
+                name="kernel",
+                description="Doors kernel module"
             )
         ]
 
@@ -178,6 +308,14 @@ class DoorsInfo(plugins.PluginInterface):
     def run(self) -> renderers.TreeGrid:
         """Runs the Doors OS Info plugin."""
         vollog.info("Starting DoorsInfo plugin")
+
+        try:
+            kernel = self.context.modules[self.config['doors_kernel1']]
+            vollog.debug(f"Symbol table loaded: {self.config['doors_kernel1']}")
+        except KeyError as e:
+            vollog.error(f"Failed to load symbol table: {e}")
+            vollog.error(f"Available modules: {list(self.context.modules.keys())}")
+            raise
 
         # Get symbol value for PAGE_TABLE_PDP_BOOT
         page_table_pdp_boot_value = None

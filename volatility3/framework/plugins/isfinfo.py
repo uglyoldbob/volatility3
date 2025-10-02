@@ -86,7 +86,7 @@ class IsfInfo(plugins.PluginInterface):
             file_list = [self.config["isf"]]
         else:
             file_list = list(self.list_all_isf_files())
-
+        
         # Filter the files
         filtered_list = []
         if not len(self.config["filter"]):
@@ -124,7 +124,9 @@ class IsfInfo(plugins.PluginInterface):
                             constants.CACHE_PATH, constants.IDENTIFIERS_FILENAME
                         )
                         identifier_cache = symbol_cache.SqliteCache(identifiers_path)
+                        print(f"IDENTIFIER LOOKUP LIVE IS {entry}")
                         identifier = identifier_cache.get_identifier(location=entry)
+                        print(f"IDENTIFIER LOOKUP LIVE IS {identifier}")
                         if identifier:
                             identifier = identifier.decode("utf-8", errors="replace")
                         else:

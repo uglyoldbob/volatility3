@@ -611,6 +611,8 @@ class ConstructableRequirementInterface(RequirementInterface):
                     self._current_class_requirements.remove(old_req)
                 # And add the new ones
                 for requirement in class_req.cls.get_requirements():
+                    vollog.info("Requirement below")
+                    vollog.info(vars(requirement))
                     self._current_class_requirements.add(requirement.name)
                     self.add_requirement(requirement)
 

@@ -96,6 +96,8 @@ class PosixMetadata(interfaces.symbols.MetadataInterface):
         """Returns the symbols sources metadata"""
         return self._json_data.get("symbols", [])
 
+class DoorsMetadata(PosixMetadata):
+    """Class to handle the metadata from a Linux symbol table."""
 
 class LinuxMetadata(PosixMetadata):
     """Class to handle the metadata from a Linux symbol table."""

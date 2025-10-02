@@ -66,6 +66,19 @@ class WindowsIdentifier(IdentifierProcessor):
     def generate(cls, pdb_name: str, guid: str, age: int) -> bytes:
         return bytes(cls.separator.join([pdb_name, guid.upper(), str(age)]), "latin-1")
 
+class DoorsIdentifier(IdentifierProcessor):
+    operating_system = "doors"
+
+    @classmethod
+    def get_identifier(cls, json) -> Optional[bytes]:
+        print(f"LOOKING IN {json.get("symbols", {}).get("doors_banner", {})}")
+        print(f"LOOKING2 IN {json.get("symbols", {}).get("doors_banner", {}).get("address", None)}")
+        doors_banner = (
+            json.get("symbols", {}).get("doors_banner", {}).get("address", None)
+        )
+        if doors_banner:
+            return "doors"
+        return None
 
 class MacIdentifier(IdentifierProcessor):
     operating_system = "mac"
@@ -259,6 +272,14 @@ class SqliteCache(CacheManagerInterface):
     def get_identifier(self, location: str) -> Optional[bytes]:
         results = (
             self._database.cursor()
+            .execute("SELECT * FROM cache")
+            .fetchall()
+        )
+        for row in results:
+            for a in row:
+                print(f"row is {a}")
+        results = (
+            self._database.cursor()
             .execute("SELECT identifier FROM cache WHERE location = ?", (location,))
             .fetchall()
         )
@@ -395,8 +416,10 @@ class SqliteCache(CacheManagerInterface):
                         operating_system = None
                         for idextractor in idextractors:
                             identifier = idextractor.get_identifier(json_obj)
+                            print(f"ID FOUND IS {identifier}")
                             if identifier is not None:
                                 operating_system = idextractor.operating_system
+                                print(f"OS IS {operating_system}")
                                 break
 
                         # We don't try to validate schemas here, we do that on first use
